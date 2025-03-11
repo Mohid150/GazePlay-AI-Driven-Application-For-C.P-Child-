@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "react-native-webview": "^13.13.1",
+    "react-webcam": "^7.2.0"
+  }
+}

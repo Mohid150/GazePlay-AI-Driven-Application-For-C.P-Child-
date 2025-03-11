@@ -1,0 +1,85 @@
+import cv2
+import mediapipe as mp
+import pyautogui
+from flask import Flask
+from flask_socketio import SocketIO, emit
+import threading
+import time
+
+app = Flask(__name__)
+socketio = SocketIO(app, cors_allowed_origins="*")
+
+class HeadTrackingServer:
+    def __init__(self):
+        self.cam = cv2.VideoCapture(0)
+        self.face_mesh = mp.solutions.face_mesh.FaceMesh(refine_landmarks=True)
+        self.screen_w, self.screen_h = pyautogui.size()
+        self.tracking_thread = None
+        self.is_running = False
+
+    def start_tracking(self):
+        self.is_running = True
+        self.tracking_thread = threading.Thread(target=self._track_head)
+        self.tracking_thread.start()
+
+    def stop_tracking(self):
+        self.is_running = False
+        if self.tracking_thread:
+            self.tracking_thread.join()
+        self.cam.release()
+
+    def _track_head(self):
+        while self.is_running:
+            _, frame = self.cam.read()
+            frame = cv2.flip(frame, 1)
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            output = self.face_mesh.process(rgb_frame)
+            landmark_points = output.multi_face_landmarks
+            frame_h, frame_w, _ = frame.shape
+
+            tracking_data = {
+                'tracking': False,
+                'cursor_x': 0,
+                'cursor_y': 0,
+                'click': False
+            }
+
+            if landmark_points:
+                landmarks = landmark_points[0].landmark
+                tracking_data['tracking'] = True
+
+                for id, landmark in enumerate(landmarks[474:478]):
+                    if id == 1:
+                        screen_x = self.screen_w * landmark.x
+                        screen_y = self.screen_h * landmark.y
+                        tracking_data['cursor_x'] = screen_x
+                        tracking_data['cursor_y'] = screen_y
+                        pyautogui.moveTo(screen_x, screen_y)
+
+                left = [landmarks[145], landmarks[159]]
+                if (left[0].y - left[1].y) < 0.004:
+                    pyautogui.click()
+                    tracking_data['click'] = True
+                    time.sleep(1)
+
+            socketio.emit('head_tracking', tracking_data)
+            time.sleep(0.1)  # Reduce CPU usage
+
+head_tracker = HeadTrackingServer()
+
+@socketio.on('connect')
+def handle_connect():
+    print('Client connected')
+    head_tracker.start_tracking()
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    print('Client disconnected')
+    head_tracker.stop_tracking()
+
+@socketio.on_error()
+def error_handler(e):
+    print(f'An error occurred: {e}')
+
+if __name__ == '__main__':
+    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
